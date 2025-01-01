@@ -1,25 +1,40 @@
 #include <windows.h>
 #include <iostream>
-#include <string>
-#include <cstdlib>
 
-// Path to devcon.exe
-const std::string DEVCON_PATH = "C:\\Tools\\devcon.exe"; // Update this with the correct path to devcon.exe
-const std::string KEYBOARD_HW_ID = "ACPI\\PNP0303";      // Replace with your keyboard's actual hardware ID
+HHOOK hKeyboardHook; // Global variable to store the keyboard hook
+bool isPenActive = false; // Tracks whether the pen is touching the screen
 
-void ExecuteDevConCommand(const std::string& action) {
-    std::string command = DEVCON_PATH + " " + action + " " + KEYBOARD_HW_ID;
-    system(command.c_str());
+// Function to enable the keyboard hook
+void EnableKeyboardHook() {
+    hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, [](int nCode, WPARAM wParam, LPARAM lParam) -> LRESULT {
+        if (isPenActive && nCode >= 0 && wParam == WM_KEYDOWN) {
+            return 1; // Suppress the keyboard input if pen is active
+        }
+        return CallNextHookEx(hKeyboardHook, nCode, wParam, lParam);
+        }, NULL, 0);
+
+    if (hKeyboardHook == NULL) {
+        std::cerr << "Failed to install keyboard hook. Error: " << GetLastError() << std::endl;
+    }
 }
 
+// Function to disable the keyboard hook
+void DisableKeyboardHook() {
+    if (hKeyboardHook != NULL) {
+        UnhookWindowsHookEx(hKeyboardHook);
+        hKeyboardHook = NULL;
+    }
+}
+
+// Window procedure to detect pen input
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_POINTERDOWN: {
         UINT32 pointerId = GET_POINTERID_WPARAM(wParam);
         POINTER_INPUT_TYPE pointerType;
         if (GetPointerType(pointerId, &pointerType) && pointerType == PT_PEN) {
-            // Pen detected: Disable the keyboard
-            ExecuteDevConCommand("disable");
+            isPenActive = true; // Pen is touching the screen
+            std::cout << "Pen detected: Disabling keyboard input." << std::endl;
         }
         break;
     }
@@ -27,8 +42,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         UINT32 pointerId = GET_POINTERID_WPARAM(wParam);
         POINTER_INPUT_TYPE pointerType;
         if (GetPointerType(pointerId, &pointerType) && pointerType == PT_PEN) {
-            // Pen lifted: Enable the keyboard
-            ExecuteDevConCommand("enable");
+            isPenActive = false; // Pen is lifted
+            std::cout << "Pen lifted: Enabling keyboard input." << std::endl;
         }
         break;
     }
@@ -42,6 +57,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+    // Set up the keyboard hook
+    EnableKeyboardHook();
+
+    // Create a hidden window to monitor pen input
     const wchar_t CLASS_NAME[] = L"PenKeyboardToggle";
 
     WNDCLASS wc = {};
@@ -52,12 +71,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     RegisterClass(&wc);
 
     HWND hWnd = CreateWindowEx(
-        0,                              // Optional window styles
-        CLASS_NAME,                     // Window class
-        L"Pen Keyboard Toggle",         // Window title (wide-character string)
-        0,                              // No visible window (run in background)
+        0,
+        CLASS_NAME,
+        L"Pen Keyboard Toggle",
+        0,
         CW_USEDEFAULT, CW_USEDEFAULT, 0, 0,
-        nullptr, nullptr, hInstance, nullptr);
+        nullptr, nullptr, hInstance, nullptr
+    );
 
     if (hWnd == nullptr) {
         return 0;
@@ -65,12 +85,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     ShowWindow(hWnd, SW_HIDE); // Hide the window to run silently in the background
 
+    // Message loop
     MSG msg = {};
     while (GetMessage(&msg, nullptr, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
 
+    DisableKeyboardHook(); // Cleanup before exiting
+
     return 0;
 }
-
